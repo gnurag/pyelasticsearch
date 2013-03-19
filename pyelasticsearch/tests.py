@@ -67,6 +67,12 @@ class IndexingTestCase(ElasticSearchTestCase):
         result = self.conn.open_index('test-index')
         self.assertResultContains(result, {'acknowledged': True, 'ok': True})
 
+    def testGetSettings(self):
+        self.conn.create_index('test-index')
+        result = self.conn.get_settings('test-index')
+        self.assertTrue('test-index'in result)
+        self.assertTrue('settings' in result['test-index'])
+
     def testUpdateSettings(self):
         """Make sure ``update_settings()`` sends the expected request."""
         with patch.object(self.conn, 'send_request') as send_request:
@@ -204,7 +210,7 @@ class IndexingTestCase(ElasticSearchTestCase):
 
     def testErrorHandling(self):
         # Wrong port.
-        conn = ElasticSearch('http://example.com:1009200/')
+        conn = ElasticSearch('http://localhost:1009200/')
         self.assertRaises(ConnectionError, conn.count, '*:*')
 
         # Test invalid JSON.
@@ -224,11 +230,42 @@ class IndexingTestCase(ElasticSearchTestCase):
                              params={'count': 5},
                              lang='python')
         send_request.assert_called_once_with(
-            'POST', ['some_index', 'some_type', 3],
+            'POST', ['some_index', 'some_type', 3, '_update'],
             body={'script': SCRIPT,
                   'params': {'count': 5},
                   'lang': 'python'},
                   query_params={})
+
+    def testAliasIndex(self):
+        self.conn.create_index('test-index')
+        settings = {
+            "actions": [
+                {"add": {"index": "test-index", "alias": "test-alias"}}
+            ]
+        }
+        result = self.conn.update_aliases(settings)
+        self.assertResultContains(result, {'acknowledged': True, 'ok': True})
+
+    def testAliasNonexistentIndex(self):
+        settings = {
+            "actions": [
+                {"add": {"index": "test1", "alias": "alias1"}}
+            ]
+        }
+        self.assertRaises(ElasticHttpNotFoundError,
+                          self.conn.update_aliases,
+                          settings)
+
+    def testListAliases(self):
+        self.conn.create_index('test-index')
+        settings = {
+            "actions": [
+                {"add": {"index": "test-index", "alias": "test-alias"}}
+            ]
+        }
+        self.conn.update_aliases(settings)
+        result = self.conn.aliases('test-index')
+        self.assertEqual(result, {u'test-index': {u'aliases': {u'test-alias': {}}}})
 
 
 class SearchTestCase(ElasticSearchTestCase):
@@ -249,6 +286,16 @@ class SearchTestCase(ElasticSearchTestCase):
     def testSearchByField(self):
         result = self.conn.search('name:joe', index='test-index')
         self.assertResultContains(result, {'hits': {'hits': [{'_score': 0.19178301, '_type': 'test-type', '_id': '1', '_source': {'name': 'Joe Tester'}, '_index': 'test-index'}], 'total': 1, 'max_score': 0.19178301}})
+
+    def testSearchStringPaginated(self):
+        with patch.object(self.conn, 'send_request') as send_request:
+            self.conn.search('*:*', index='test-index', es_from=1, size=1)
+
+        send_request.assert_called_once_with(
+            'GET',
+            ['test-index', '', '_search'],
+            '',
+            query_params={'q': '*:*', 'from': 1, 'size': 1})
 
     def testSearchByDSL(self):
         self.conn.index('test-index', 'test-type', {'name': 'AgeJoe Tester', 'age': 25}, id=1)

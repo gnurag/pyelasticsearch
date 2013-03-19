@@ -254,7 +254,7 @@ class ElasticSearch(object):
     ## REST API
 
     @es_kwargs('routing', 'parent', 'timestamp', 'ttl', 'percolate',
-               'consistency', 'replication', 'refresh', 'timeout')
+               'consistency', 'replication', 'refresh', 'timeout', 'fields')
     def index(self, index, doc_type, doc, id=None, force_insert=False,
               query_params=None):
         """
@@ -425,11 +425,12 @@ class ElasticSearch(object):
 
 
     @es_kwargs('routing', 'parent', 'timeout', 'replication', 'consistency',
-               'percolate', 'refresh', 'retry_on_conflict')
-    def update(self, index, doc_type, id, script, params=None, lang=None,
-               query_params=None):
+               'percolate', 'refresh', 'retry_on_conflict', 'fields')
+    def update(self, index, doc_type, id, script=None, params=None, lang=None,
+               query_params=None, doc=None, upsert=None):
         """
-        Update a document by means of a script.
+        Update an existing document. Raise ``TypeError`` if ``script``, ``doc``
+        and ``upsert`` are all unspecified.
 
         :arg index: The name of the index containing the document
         :arg doc_type: The type of the document
@@ -438,14 +439,30 @@ class ElasticSearch(object):
         :arg params: A dict of the params to be put in scope of the script
         :arg lang: The language of the script. Omit to use the default,
             specified by ``script.default_lang``.
+        :arg doc: A partial document to be merged into the existing document
+        :arg upsert: The content for the new document created if the document
+            does not exist
         """
-        body = {'script': script}
+        if script is None and doc is None and upsert is None:
+            raise TypeError('At least one of the script, doc, or upsert '
+                            'kwargs must be provided.')
+
+        body = {}
+        if script:
+            body['script'] = script
+        if lang and script:
+            body['lang'] = lang
+        if doc:
+            body['doc'] = doc
+        if upsert:
+            body['upsert'] = upsert
         if params:
             body['params'] = params
-        if lang:
-            body['lang'] = lang
-        return self.send_request('POST', [index, doc_type, id, '_update'], body=body,
-                                 query_params=query_params)
+        return self.send_request(
+            'POST',
+            [index, doc_type, id, '_update'],
+            body=body,
+            query_params=query_params)
 
     def _search_or_count(self, kind, query, index=None, doc_type=None,
                          query_params=None):
@@ -461,7 +478,7 @@ class ElasticSearch(object):
             body,
             query_params=query_params)
 
-    @es_kwargs('routing')
+    @es_kwargs('routing', 'size')
     def search(self, query, **kwargs):
         """
         Execute a search query against one or more indices and get back search
@@ -474,6 +491,8 @@ class ElasticSearch(object):
             all.
         :arg doc_type: A document type or iterable thereof to search. Omit to
             search all.
+        :arg size: Limit the number of results to ``size``. Use with ``es_from`` to
+            implement paginated searching.
 
         See `ES's search API`_ for more detail.
 
@@ -598,6 +617,36 @@ class ElasticSearch(object):
                                  query_params=query_params)
 
     @es_kwargs()
+    def update_aliases(self, settings, query_params=None):
+        """
+        Add, remove, or update aliases in bulk.
+
+        :arg settings: a dictionary specifying the actions to perform
+
+        See `ES's admin-indices-aliases API`_.
+
+        .. _`ES's admin-indices-aliases API`:
+            http://www.elasticsearch.org/guide/reference/api/admin-indices-aliases.html
+        """
+        return self.send_request('POST', ['_aliases'],
+                                 body=settings, query_params=query_params)
+
+    @es_kwargs()
+    def aliases(self, index=None, query_params=None):
+        """
+        Retrieve a listing of aliases
+
+        :arg index: the name of an index or an iterable of indices
+
+        See `ES's admin-indices-aliases API`_.
+
+        .. _`ES's admin-indices-aliases API`:
+            http://www.elasticsearch.org/guide/reference/api/admin-indices-aliases.html
+        """
+        return self.send_request('GET', [self._concat(index), '_aliases'],
+                                 query_params=query_params)
+
+    @es_kwargs()
     def create_index(self, index, settings=None, query_params=None):
         """
         Create an index with optional settings.
@@ -663,6 +712,22 @@ class ElasticSearch(object):
             http://www.elasticsearch.org/guide/reference/api/admin-indices-open-close.html
         """
         return self.send_request('POST', [index, '_open'],
+                                 query_params=query_params)
+
+    @es_kwargs()
+    def get_settings(self, index, query_params=None):
+        """
+        Get the settings of one or more indexes.
+
+        :arg index: An index or iterable of indexes
+
+        See `ES's get-settings API`_ for more detail.
+
+        .. _`ES's get-settings API`:
+            http://www.elasticsearch.org/guide/reference/api/admin-indices-get-settings.html
+        """
+        return self.send_request('GET',
+                                 [self._concat(index), '_settings'],
                                  query_params=query_params)
 
     @es_kwargs()
